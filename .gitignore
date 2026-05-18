@@ -7,3 +7,4 @@ trades_history.json
 bot.log
 *.log
 .DS_Store
+HANDOFF.md
