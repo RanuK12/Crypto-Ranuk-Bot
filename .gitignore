@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+state.json
+trades_history.json
+bot.log
+*.log
+.DS_Store
