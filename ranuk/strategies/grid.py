@@ -60,9 +60,15 @@ class GridTrader:
         cur = await self.ex.price(symbol)
         results = []
 
+        # Trend guard: if price broke strongly outside grid range, pause NEW buys
+        # until reset. This prevents "catching a falling knife" in strong dumps.
+        strong_breakout = cur < grid.low * 0.985 or cur > grid.high * 1.015
+
         for i, level_px in enumerate(grid.buy_prices):
             # BUY at this level
             if cur <= level_px and grid.inventory[i] == 0:
+                if strong_breakout:
+                    continue  # pause buys during strong directional breakout
                 ok, _ = self.risk.can_trade(grid.per_level_usdt)
                 if not ok:
                     continue
@@ -129,4 +135,4 @@ class GridTrader:
                             log.info(f"[yellow]GRID RESET[/] {r['symbol']} new=${r['new_center']:,.2f}")
                 except Exception as e:
                     log.warning(f"Grid {pair}: {e}")
-            await asyncio.sleep(10)
+            await asyncio.sleep(5)  # faster grid ticks
