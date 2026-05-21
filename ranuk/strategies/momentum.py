@@ -21,8 +21,11 @@ from ranuk.risk import RiskManager
 from ranuk.intelligence import Intelligence, TradeRecord
 
 MAX_POSITIONS = 10
-MAX_PER_SCAN = 8
-POSITION_SIZE_PCT = 0.04  # 4% of capital per trade ($0.80 on $20)
+MAX_PER_SCAN = 5
+POSITION_SIZE_PCT = 0.05  # 5% of capital per trade ($3.50 on $70)
+MIN_SCORE = 4.5  # Higher quality only — TIMEOUT was 20% WR at 3.5
+EARLY_TIMEOUT_SECS = 90  # Cut faster if no movement
+EARLY_TIMEOUT_MIN_MOVE = 0.003  # Need at least 0.3% move to stay
 
 
 @dataclass
@@ -48,7 +51,7 @@ class Position:
 
     @property
     def timeout(self) -> float:
-        return 300 if self.mode == "scalp" else 7200  # 5min / 2h
+        return 300 if self.mode == "scalp" else 3600  # 5min / 1h (was 2h, TIMEOUT had 20% WR)
 
     @property
     def trailing_sl(self) -> float:
@@ -91,26 +94,26 @@ class MomentumScanner:
         change = g["change"]
         score = 0.0
 
-        # Volume sweet spot: $100k-$800k (from winner data)
-        if 100_000 <= vol <= 800_000:
-            score += 2.0
-        elif 50_000 <= vol <= 100_000:
-            score += 1.0
-        elif vol > 800_000:
-            score += 0.5  # too crowded but still tradeable
+        # Volume sweet spot: $200k-$1M (from winner data — higher vol = more reliable)
+        if 200_000 <= vol <= 1_000_000:
+            score += 2.5
+        elif 150_000 <= vol <= 200_000:
+            score += 1.5
+        elif vol > 1_000_000:
+            score += 1.0  # too crowded but still tradeable
 
-        # Change sweet spot: 3-10% = early momentum, >10% = exhausted
-        if 3.0 <= change <= 7.0:
+        # Change sweet spot: 3-8% = early momentum, >10% = exhausted
+        if 3.0 <= change <= 6.0:
             score += 3.0  # ideal: catching early
             mode = "swing"
-        elif 1.5 <= change < 3.0:
-            score += 2.5  # very early, scalp it
+        elif 2.0 <= change < 3.0:
+            score += 2.0  # very early, scalp it
             mode = "scalp"
-        elif 7.0 < change <= 12.0:
+        elif 6.0 < change <= 10.0:
             score += 1.5  # moderate, scalp only
             mode = "scalp"
-        elif 12.0 < change <= 20.0:
-            score += 0.5  # risky but possible scalp
+        elif 10.0 < change <= 15.0:
+            score += 0.5  # risky
             mode = "scalp"
         else:
             return 0, "skip"
@@ -118,8 +121,10 @@ class MomentumScanner:
         # Pullback bonus: if we've seen this token before and price dipped
         if g["symbol"] in self._last_prices:
             prices = self._last_prices[g["symbol"]]
-            if len(prices) >= 2 and prices[-1] < prices[-2]:
-                score += 1.5  # buying a dip, not the top
+            if len(prices) >= 3 and prices[-1] < prices[-2] < prices[-3]:
+                score += 2.0  # strong pullback pattern — buying a real dip
+            elif len(prices) >= 2 and prices[-1] < prices[-2]:
+                score += 1.0  # mild pullback
 
         return score, mode
 
@@ -135,15 +140,15 @@ class MomentumScanner:
             sym = g["symbol"]
             if sym in self.positions or sym in self.traded_today:
                 continue
-            if g["volume"] < 50_000:
+            if g["volume"] < 200_000:
                 continue
-            if g["change"] < 1.5 or g["change"] > 25:
+            if g["change"] < 2.5 or g["change"] > 18:
                 continue
             if any(x in sym for x in ["USD/", "UP/", "DOWN/", "BULL/", "BEAR/"]):
                 continue
 
             score, mode = self._score_opportunity(g)
-            if score < 2.0:
+            if score < MIN_SCORE:
                 continue
 
             # Spread check will happen at entry time
@@ -227,6 +232,9 @@ class MomentumScanner:
             # Stop loss
             elif pnl_pct <= -pos.sl_pct:
                 reason = "SL"
+            # Early timeout: no movement after 2min = dead trade, cut losses from fees
+            elif held > EARLY_TIMEOUT_SECS and abs(pnl_pct) < EARLY_TIMEOUT_MIN_MOVE:
+                reason = "FLAT"
             # Timeout — exit at market
             elif held > pos.timeout:
                 reason = "TIMEOUT"
