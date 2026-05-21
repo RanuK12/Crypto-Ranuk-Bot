@@ -12,7 +12,7 @@ def _i(k, d):
 
 MODE = os.getenv("MODE", "paper")
 IS_PAPER = MODE == "paper"
-TOTAL_CAPITAL = _f("TOTAL_CAPITAL_USDT", 20.0)
+TOTAL_CAPITAL = _f("TOTAL_CAPITAL_USDT", 70.0)
 
 BINANCE_KEY = os.getenv("BINANCE_API_KEY", "")
 BINANCE_SECRET = os.getenv("BINANCE_SECRET", "")
