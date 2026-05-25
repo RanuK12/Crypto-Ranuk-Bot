@@ -1,14 +1,27 @@
-"""Momentum Scanner v5 — High-frequency scalping + swing hybrid.
+"""Momentum Scanner v6 — Data-driven optimization from 798 real trades.
 
-Key changes from v4 (which had 0% winrate on 24 recent trades):
-  - Operates 24h (no hour restriction) — uses volatility regime instead
-  - 8 max opportunities per scan (was 2)
-  - SCAN_INTERVAL=5s (was 10s)
-  - Dual mode: SCALP (quick 0.5-1.5% profit, 5min hold) + SWING (2-5%, 1-4h)
-  - Smarter entry: requires price PULLBACK after pump (not buying the top)
-  - Tighter risk: scalp SL=0.5%, swing SL=1.5%
-  - Volume-weighted scoring instead of simple threshold
-  - No blacklist/whitelist — pure data-driven scoring
+Key findings from v5 (798 trades, 210W/588L = 26.3% WR):
+  - FLAT exit was DESTROYING performance: 465 trades (58%!), only 18% WR, net -4.51%
+  - Without FLAT: 126W/207L = 38% WR, avg win +1.24%, avg loss -0.67% → PROFITABLE
+  - TRAIL: 74% WR, net +13.19% → BEST exit
+  - TP: 100% WR, net +69.65% → EXCELLENT
+  - TIMEOUT: 33% WR but net +15.20% → POSITIVE (let winners run)
+  - EARLY: 0% WR, net -15.22% → REMOVED
+  - Winners avg volume: $7.6M vs losers much lower
+  - Vol>1M + Change>=5%: 37% WR (vs 26% general)
+  - Vol>1M + Change>=8%: 41% WR
+  - Change 3-5%: only 22% WR → FILTER OUT
+  - Change 5-8%: 29% WR → OK
+  - Change 8-12%: 34% WR → BEST
+
+Changes in v6:
+  - REMOVED FLAT exit entirely (was generating 465 fee-losing trades)
+  - REMOVED EARLY exit (0% WR, -15.22% net)
+  - Volume minimum: 200k → 500k (winners are high-volume)
+  - Change minimum: 2.5% → 5% (3-5% was 22% WR = garbage)
+  - Scoring: heavily favor vol>1M (where 37-41% WR lives)
+  - Swing timeout: 1h → 2h (TIMEOUT was net positive, let them run)
+  - Fewer but BETTER trades = higher win rate + same R:R
 """
 from __future__ import annotations
 import asyncio
@@ -20,12 +33,10 @@ from ranuk.exchange import Exchange, TAKER_FEE
 from ranuk.risk import RiskManager
 from ranuk.intelligence import Intelligence, TradeRecord
 
-MAX_POSITIONS = 10
-MAX_PER_SCAN = 5
+MAX_POSITIONS = 8
+MAX_PER_SCAN = 3
 POSITION_SIZE_PCT = 0.05  # 5% of capital per trade ($3.50 on $70)
-MIN_SCORE = 4.5  # Higher quality only — TIMEOUT was 20% WR at 3.5
-EARLY_TIMEOUT_SECS = 90  # Cut faster if no movement
-EARLY_TIMEOUT_MIN_MOVE = 0.003  # Need at least 0.3% move to stay
+MIN_SCORE = 5.0  # Only high-quality (data shows lower scores = FLAT exits)
 
 
 @dataclass
@@ -43,15 +54,15 @@ class Position:
 
     @property
     def tp_pct(self) -> float:
-        return 0.012 if self.mode == "scalp" else 0.04
+        return 0.015 if self.mode == "scalp" else 0.04
 
     @property
     def sl_pct(self) -> float:
-        return 0.006 if self.mode == "scalp" else 0.015
+        return 0.008 if self.mode == "scalp" else 0.015
 
     @property
     def timeout(self) -> float:
-        return 300 if self.mode == "scalp" else 3600  # 5min / 1h (was 2h, TIMEOUT had 20% WR)
+        return 300 if self.mode == "scalp" else 7200  # 5min / 2h (TIMEOUT was net +15.20%)
 
     @property
     def trailing_sl(self) -> float:
@@ -62,9 +73,9 @@ class Position:
             return self.entry_price * (1 - self.sl_pct)
         else:
             if gain >= 0.03:
-                return self.highest * (1 - 0.015)
+                return self.highest * (1 - 0.012)
             elif gain >= 0.015:
-                return self.highest * (1 - 0.01)
+                return self.highest * (1 - 0.008)
             return self.entry_price * (1 - self.sl_pct)
 
 
@@ -80,7 +91,7 @@ class MomentumScanner:
         self.total_fees: float = 0.0
         self.wins: int = 0
         self.losses: int = 0
-        self._last_prices: dict[str, list[float]] = {}  # symbol -> recent prices for pullback detection
+        self._last_prices: dict[str, list[float]] = {}
 
     def _reset_traded_today(self):
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -89,42 +100,41 @@ class MomentumScanner:
             self._traded_day = today
 
     def _score_opportunity(self, g: dict) -> tuple[float, str]:
-        """Score an opportunity. Returns (score, mode). Higher = better."""
+        """Score based on real data: vol>1M + change 5-12% = winners."""
         vol = g["volume"]
         change = g["change"]
         score = 0.0
 
-        # Volume sweet spot: $200k-$1M (from winner data — higher vol = more reliable)
-        if 200_000 <= vol <= 1_000_000:
-            score += 2.5
-        elif 150_000 <= vol <= 200_000:
-            score += 1.5
+        # Volume scoring (winners avg $7.6M, vol>1M = 36% WR vs 20% for <500k)
+        if vol > 5_000_000:
+            score += 4.0  # mega volume = strongest signal
         elif vol > 1_000_000:
-            score += 1.0  # too crowded but still tradeable
+            score += 3.0  # vol>1M = 36% WR in data
+        elif vol > 500_000:
+            score += 1.5  # acceptable but weaker
+        else:
+            return 0, "skip"  # <500k was terrible in data
 
-        # Change sweet spot: 3-8% = early momentum, >10% = exhausted
-        if 3.0 <= change <= 6.0:
-            score += 3.0  # ideal: catching early
+        # Change scoring (8-12% = 34% WR, 5-8% = 29% WR, <5% = 22% WR)
+        if 8.0 <= change <= 15.0:
+            score += 3.0  # best bucket: 34% WR
             mode = "swing"
-        elif 2.0 <= change < 3.0:
-            score += 2.0  # very early, scalp it
-            mode = "scalp"
-        elif 6.0 < change <= 10.0:
-            score += 1.5  # moderate, scalp only
-            mode = "scalp"
-        elif 10.0 < change <= 15.0:
-            score += 0.5  # risky
+        elif 5.0 <= change < 8.0:
+            score += 2.0  # decent: 29% WR
+            mode = "swing"
+        elif 15.0 < change <= 25.0:
+            score += 1.0  # risky but can work with high vol
             mode = "scalp"
         else:
             return 0, "skip"
 
-        # Pullback bonus: if we've seen this token before and price dipped
+        # Pullback bonus
         if g["symbol"] in self._last_prices:
             prices = self._last_prices[g["symbol"]]
             if len(prices) >= 3 and prices[-1] < prices[-2] < prices[-3]:
-                score += 2.0  # strong pullback pattern — buying a real dip
+                score += 2.0
             elif len(prices) >= 2 and prices[-1] < prices[-2]:
-                score += 1.0  # mild pullback
+                score += 1.0
 
         return score, mode
 
@@ -140,9 +150,10 @@ class MomentumScanner:
             sym = g["symbol"]
             if sym in self.positions or sym in self.traded_today:
                 continue
-            if g["volume"] < 200_000:
+            # Hard filters based on data
+            if g["volume"] < 500_000:
                 continue
-            if g["change"] < 2.5 or g["change"] > 18:
+            if g["change"] < 5.0 or g["change"] > 25.0:
                 continue
             if any(x in sym for x in ["USD/", "UP/", "DOWN/", "BULL/", "BEAR/"]):
                 continue
@@ -151,7 +162,6 @@ class MomentumScanner:
             if score < MIN_SCORE:
                 continue
 
-            # Spread check will happen at entry time
             opps.append({"symbol": sym, "volume": g["volume"], "change": g["change"],
                         "score": score, "mode": mode})
 
@@ -163,7 +173,6 @@ class MomentumScanner:
             if len(self._last_prices[sym]) > 6:
                 self._last_prices[sym] = self._last_prices[sym][-6:]
 
-        # Sort by score, take top N
         opps.sort(key=lambda x: -x["score"])
         slots = MAX_POSITIONS - len(self.positions)
         return opps[:min(MAX_PER_SCAN, slots)]
@@ -184,7 +193,7 @@ class MomentumScanner:
             ask = float(ticker.get("ask", 0) or 0)
             if bid > 0 and ask > 0:
                 spread = (ask - bid) / ((ask + bid) / 2)
-                max_spread = 0.003 if opp["mode"] == "scalp" else 0.006
+                max_spread = 0.004 if opp["mode"] == "scalp" else 0.008
                 if spread > max_spread:
                     return None
         except Exception:
@@ -223,24 +232,20 @@ class MomentumScanner:
             held = time.time() - pos.opened_at
             reason = None
 
-            # Take profit
+            # Take profit (100% WR, net +69.65%)
             if pnl_pct >= pos.tp_pct:
                 reason = "TP"
-            # Trailing stop (only if we've been in profit)
+            # Trailing stop (74% WR, net +13.19% — our BEST exit)
             elif pos.highest > pos.entry_price * 1.005 and cur <= pos.trailing_sl:
                 reason = "TRAIL"
-            # Stop loss
+            # Stop loss (necessary evil)
             elif pnl_pct <= -pos.sl_pct:
                 reason = "SL"
-            # Early timeout: no movement after 2min = dead trade, cut losses from fees
-            elif held > EARLY_TIMEOUT_SECS and abs(pnl_pct) < EARLY_TIMEOUT_MIN_MOVE:
-                reason = "FLAT"
-            # Timeout — exit at market
+            # Timeout (33% WR but net +15.20% — let winners run!)
             elif held > pos.timeout:
                 reason = "TIMEOUT"
-            # Quick cut: if scalp and -0.3% after 60s, cut immediately
-            elif pos.mode == "scalp" and held > 60 and pnl_pct < -0.003:
-                reason = "EARLY"
+            # NO FLAT EXIT — it was destroying 58% of trades
+            # NO EARLY EXIT — 0% WR, -15.22% net
 
             if reason:
                 result = await self.ex.sell(sym, pos.qty)
@@ -272,9 +277,9 @@ class MomentumScanner:
 
     async def run_forever(self, log):
         log.info(
-            f"[green]MomentumScanner v5 (scalp+swing)[/] "
-            f"max_pos={MAX_POSITIONS} scan_interval={SCAN_INTERVAL}s "
-            f"scalp_tp=1.2%/sl=0.6% swing_tp=4%/sl=1.5%"
+            f"[green]MomentumScanner v6 (data-driven)[/] "
+            f"max_pos={MAX_POSITIONS} min_vol=$500k min_change=5% "
+            f"NO FLAT/EARLY exits | swing_tp=4%/sl=1.5%/timeout=2h"
         )
         while True:
             try:
