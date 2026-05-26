@@ -28,7 +28,8 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from ranuk.config import TOTAL_CAPITAL, SCAN_INTERVAL
+from ranuk.config import SCAN_INTERVAL
+from ranuk.config import TOTAL_CAPITAL as _INITIAL_CAPITAL
 from ranuk.exchange import Exchange, TAKER_FEE
 from ranuk.risk import RiskManager
 from ranuk.intelligence import Intelligence, TradeRecord
@@ -36,6 +37,7 @@ from ranuk.intelligence import Intelligence, TradeRecord
 MAX_POSITIONS = 8
 MAX_PER_SCAN = 3
 POSITION_SIZE_PCT = 0.08  # 8% of capital per trade ($5.60 on $70)
+TOTAL_CAPITAL = _INITIAL_CAPITAL  # mutable at runtime via telegram commands
 MIN_SCORE = 5.0  # Only high-quality (data shows lower scores = FLAT exits)
 
 
@@ -92,6 +94,7 @@ class MomentumScanner:
         self.wins: int = 0
         self.losses: int = 0
         self._last_prices: dict[str, list[float]] = {}
+        self._paused: bool = False
 
     def _reset_traded_today(self):
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -140,7 +143,7 @@ class MomentumScanner:
 
     async def scan_once(self) -> list[dict]:
         self._reset_traded_today()
-        if len(self.positions) >= MAX_POSITIONS:
+        if self._paused or len(self.positions) >= MAX_POSITIONS:
             return []
 
         gainers = await self.ex.top_gainers(80)
