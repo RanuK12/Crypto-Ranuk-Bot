@@ -193,8 +193,8 @@ class BTCSniper:
             print(f"\n📊 New market window: {datetime.fromtimestamp(market_start, tz=timezone.utc).strftime('%H:%M')} - {datetime.fromtimestamp(market_end, tz=timezone.utc).strftime('%H:%M')} UTC")
             print(f"   BTC start price: ${self.btc_price:,.2f}")
 
-        # Entry window: 30-90s before close (wide enough to not miss)
-        if 30 <= time_to_close <= 90 and not hasattr(self, f'_traded_{market_start}'):
+        # Entry window: 120-180s before close (earlier = better prices)
+        if 120 <= time_to_close <= 180 and not hasattr(self, f'_traded_{market_start}'):
             direction = self._get_direction()
             change_pct = (self.btc_price - self.btc_price_at_start) / self.btc_price_at_start * 100
 
@@ -218,13 +218,15 @@ class BTCSniper:
             ob = await self._check_orderbook(session, token)
             asks = ob.get("asks", [])
 
-            # Determine entry price — use best ask if available
+            # Determine entry price — use best ask if available and reasonable
             if asks:
                 best_ask = float(asks[0]["price"])
-                entry_price = best_ask  # Take the ask
-                if entry_price > MAX_MAKER_PRICE:
-                    print(f"   ⏭ Ask too high: ${entry_price:.3f} > ${MAX_MAKER_PRICE}")
-                    return
+                if best_ask <= MAX_MAKER_PRICE:
+                    entry_price = best_ask  # Take the ask
+                else:
+                    # Ask too expensive — place our own limit order as maker
+                    entry_price = MAKER_PRICE
+                    print(f"   📝 Ask={best_ask:.3f} too high, placing maker @ {entry_price:.3f}")
             else:
                 # No liquidity — place limit order at our price
                 entry_price = MAKER_PRICE
