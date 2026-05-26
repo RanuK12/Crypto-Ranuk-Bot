@@ -57,8 +57,9 @@ async def api_state(request):
     poly = await get_poly_data()
     # Calculate real equity: current value of active positions + redeemable
     poly_equity = sum(p["current"] for p in poly if p["status"] == "active")
-    poly_initial = sum(p["initial"] for p in poly)
-    poly_pnl = sum(p["pnl"] for p in poly)
+    active_pos = [p for p in poly if p["status"] == "active"]
+    poly_initial = sum(p["initial"] for p in active_pos)
+    poly_pnl = sum(p["pnl"] for p in active_pos)
     trades = _read_json([SHARED_TRADES, TRADES_FILE, Path("trades_history.json")]) or []
     return web.json_response({
         "crypto": crypto,
@@ -66,10 +67,10 @@ async def api_state(request):
             "equity": round(poly_equity, 4),
             "invested": round(poly_initial, 4),
             "pnl": round(poly_pnl, 4),
-            "positions": poly,
-            "total_positions": len(poly),
+            "positions": active_pos,
+            "total_positions": len(active_pos),
         },
-        "total_capital": round(crypto.get("capital", 20) + poly_equity, 2),
+        "total_capital": round(crypto.get("capital", 70) + poly_equity, 2),
         "total_pnl": round(crypto.get("pnl_today", 0) + poly_pnl, 4),
         "trades_history": trades[-50:],
         "timestamp": time.time(),
@@ -139,7 +140,7 @@ canvas{max-height:200px}
     <div class="panel"><h3>⚡ Últimos trades</h3><div id="trades"></div></div>
   </div>
   <div class="row">
-    <div class="panel"><h3>🎯 Polymarket Posiciones (${polyCount})</h3><table><thead><tr><th>Mercado</th><th>Outcome</th><th>Invertido</th><th>PnL</th><th>Status</th></tr></thead><tbody id="positions"></tbody></table></div>
+    <div class="panel"><h3 id="polyTitle">🎯 Polymarket Posiciones</h3><table><thead><tr><th>Mercado</th><th>Outcome</th><th>Invertido</th><th>PnL</th><th>Status</th></tr></thead><tbody id="positions"></tbody></table></div>
     <div class="panel"><h3>₿ Crypto Stats</h3><div id="cryptoStats"></div></div>
   </div>
 </div>
@@ -168,7 +169,9 @@ function renderMetrics(d){
 }
 function renderPositions(pos){
   const tb=document.getElementById('positions');
-  if(!pos||!pos.length){tb.innerHTML='<tr><td colspan="5" class="empty">Sin posiciones</td></tr>';return;}
+  const title=document.getElementById('polyTitle');
+  if(!pos||!pos.length){tb.innerHTML='<tr><td colspan="5" class="empty">Sin posiciones</td></tr>';title.textContent='🎯 Polymarket Posiciones (0)';return;}
+  title.textContent='🎯 Polymarket Posiciones ('+pos.length+')';
   tb.innerHTML=pos.map(p=>{
     const cls=p.pnl>=0?'pos':'neg';
     const badge=p.status==='active'?'badge-active':p.status==='redeemable'?'badge-redeemable':'badge-resolved';
@@ -185,12 +188,14 @@ function renderTrades(trades){
 }
 function renderCrypto(c){
   if(!c||!c.capital){document.getElementById('cryptoStats').innerHTML='<div class="empty">Esperando datos...</div>';return;}
+  const wr=c.momentum_wins?Math.round(c.momentum_wins/(c.momentum_wins+c.momentum_losses)*100):0;
   document.getElementById('cryptoStats').innerHTML=`
-    <div class="trade"><div class="sym">💰 Capital</div><div class="pnl">$${(c.capital||20).toFixed(2)}</div></div>
-    <div class="trade"><div class="sym">📊 Grid PnL</div><div class="pnl ${(c.grid_pnl||0)>=0?'pos':'neg'}">$${(c.grid_pnl||0).toFixed(4)}</div></div>
-    <div class="trade"><div class="sym">🚀 Momentum PnL</div><div class="pnl ${(c.momentum_pnl||0)>=0?'pos':'neg'}">$${(c.momentum_pnl||0).toFixed(4)}</div></div>
-    <div class="trade"><div class="sym">📈 Open Positions</div><div class="pnl">${c.momentum_open||0}</div></div>
-    <div class="trade"><div class="sym">💸 Total Fees</div><div class="pnl neg">$${(c.total_fees||0).toFixed(4)}</div></div>
+    <div class="trade"><div class="sym">💰 Capital</div><div class="pnl">$${(c.capital||70).toFixed(2)}</div></div>
+    <div class="trade"><div class="sym">📊 PnL Hoy</div><div class="pnl ${(c.pnl_today||0)>=0?'pos':'neg'}">$${(c.pnl_today||0).toFixed(4)}</div></div>
+    <div class="trade"><div class="sym">🚀 Momentum</div><div class="pnl">W${c.momentum_wins}/L${c.momentum_losses} (${wr}%)</div></div>
+    <div class="trade"><div class="sym">📈 Open</div><div class="pnl">${c.momentum_open||0} posiciones</div></div>
+    <div class="trade"><div class="sym">📊 Grid</div><div class="pnl ${(c.grid_pnl||0)>=0?'pos':'neg'}">$${(c.grid_pnl||0).toFixed(4)} (${c.grid_trades} trades)</div></div>
+    <div class="trade"><div class="sym">💸 Fees</div><div class="pnl neg">$${(c.total_fees||0).toFixed(4)}</div></div>
   `;
 }
 function updateChart(d){
