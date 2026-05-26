@@ -156,15 +156,16 @@ async function load(){
 }
 function renderMetrics(d){
   const c=d.crypto||{};const wr=c.momentum_wins?Math.round(c.momentum_wins/(c.momentum_wins+(c.momentum_losses||0))*100):0;
-  const totalTrades=(c.momentum_wins||0)+(c.momentum_losses||0)+(c.grid_trades||0);
+  const balance=c.balance||c.capital||70;
+  const momTrades=(c.momentum_wins||0)+(c.momentum_losses||0);
   document.getElementById('metrics').innerHTML=`
-    <div class="metric"><div class="label">Capital Total</div><div class="value">$${(d.total_capital||0).toFixed(2)}</div><div class="change ${d.total_pnl>=0?'pos':'neg'}">PnL: $${(d.total_pnl||0).toFixed(4)}</div></div>
-    <div class="metric"><div class="label">Polymarket</div><div class="value">$${(d.poly.invested||0).toFixed(2)}</div><div class="change ${d.poly.pnl>=0?'pos':'neg'}">PnL: $${(d.poly.pnl||0).toFixed(2)} (${d.poly.total_positions} pos)</div></div>
-    <div class="metric"><div class="label">Crypto Bot</div><div class="value">$${(c.capital||20).toFixed(2)}</div><div class="change ${(c.pnl_today||0)>=0?'pos':'neg'}">Hoy: $${(c.pnl_today||0).toFixed(4)}</div></div>
-    <div class="metric"><div class="label">Trades Hoy</div><div class="value">${totalTrades}</div><div class="change">Grid: ${c.grid_trades||0} | Mom: ${(c.momentum_wins||0)+(c.momentum_losses||0)}</div></div>
-    <div class="metric"><div class="label">Momentum</div><div class="value">W${c.momentum_wins||0}/L${c.momentum_losses||0}</div><div class="change ${wr>=50?'pos':'neg'}">${wr}% winrate</div></div>
-    <div class="metric"><div class="label">Grid PnL</div><div class="value ${(c.grid_pnl||0)>=0?'pos':'neg'}">$${(c.grid_pnl||0).toFixed(4)}</div><div class="change">${c.grid_trades||0} trades</div></div>
-    <div class="metric"><div class="label">Fees</div><div class="value neg">$${(c.total_fees||0).toFixed(4)}</div><div class="change">Binance 0.10%</div></div>
+    <div class="metric"><div class="label">Balance Total</div><div class="value">$${(balance+(d.poly.equity||0)).toFixed(2)}</div><div class="change ${(c.pnl_today||0)>=0?'pos':'neg'}">Hoy: $${(c.pnl_today||0).toFixed(4)}</div></div>
+    <div class="metric"><div class="label">Crypto Balance</div><div class="value">$${balance.toFixed(2)}</div><div class="change ${(c.momentum_pnl||0)>=0?'pos':'neg'}">Mom PnL: $${(c.momentum_pnl||0).toFixed(2)}</div></div>
+    <div class="metric"><div class="label">Polymarket</div><div class="value">$${(d.poly.equity||0).toFixed(2)}</div><div class="change ${(d.poly.pnl||0)>=0?'pos':'neg'}">PnL: $${(d.poly.pnl||0).toFixed(2)} (${d.poly.total_positions} pos)</div></div>
+    <div class="metric"><div class="label">Momentum WR</div><div class="value">${wr}%</div><div class="change">W${c.momentum_wins||0}/L${c.momentum_losses||0} (${momTrades})</div></div>
+    <div class="metric"><div class="label">Open Positions</div><div class="value">${c.momentum_open||0}</div><div class="change">Max: 8</div></div>
+    <div class="metric"><div class="label">Grid</div><div class="value ${(c.grid_pnl||0)>=0?'pos':'neg'}">$${(c.grid_pnl||0).toFixed(4)}</div><div class="change">${c.grid_trades||0} trades</div></div>
+    <div class="metric"><div class="label">Fees</div><div class="value neg">$${(c.total_fees||0).toFixed(4)}</div><div class="change">0.10% taker</div></div>
   `;
 }
 function renderPositions(pos){
@@ -189,24 +190,26 @@ function renderTrades(trades){
 function renderCrypto(c){
   if(!c||!c.capital){document.getElementById('cryptoStats').innerHTML='<div class="empty">Esperando datos...</div>';return;}
   const wr=c.momentum_wins?Math.round(c.momentum_wins/(c.momentum_wins+c.momentum_losses)*100):0;
+  const balance=c.balance||c.capital||70;
   document.getElementById('cryptoStats').innerHTML=`
-    <div class="trade"><div class="sym">💰 Capital</div><div class="pnl">$${(c.capital||70).toFixed(2)}</div></div>
+    <div class="trade"><div class="sym">💰 Balance</div><div class="pnl">$${balance.toFixed(2)}</div></div>
     <div class="trade"><div class="sym">📊 PnL Hoy</div><div class="pnl ${(c.pnl_today||0)>=0?'pos':'neg'}">$${(c.pnl_today||0).toFixed(4)}</div></div>
-    <div class="trade"><div class="sym">🚀 Momentum</div><div class="pnl">W${c.momentum_wins}/L${c.momentum_losses} (${wr}%)</div></div>
-    <div class="trade"><div class="sym">📈 Open</div><div class="pnl">${c.momentum_open||0} posiciones</div></div>
+    <div class="trade"><div class="sym">🚀 Momentum</div><div class="pnl ${(c.momentum_pnl||0)>=0?'pos':'neg'}">$${(c.momentum_pnl||0).toFixed(4)}</div></div>
+    <div class="trade"><div class="sym">📈 Win Rate</div><div class="pnl ${wr>=40?'pos':'neg'}">${wr}% (W${c.momentum_wins}/L${c.momentum_losses})</div></div>
+    <div class="trade"><div class="sym">🎯 Open</div><div class="pnl">${c.momentum_open||0} posiciones</div></div>
     <div class="trade"><div class="sym">📊 Grid</div><div class="pnl ${(c.grid_pnl||0)>=0?'pos':'neg'}">$${(c.grid_pnl||0).toFixed(4)} (${c.grid_trades} trades)</div></div>
-    <div class="trade"><div class="sym">💸 Fees</div><div class="pnl neg">$${(c.total_fees||0).toFixed(4)}</div></div>
   `;
 }
 function updateChart(d){
-  history.push({t:Date.now(),v:d.total_pnl||0,c:d.crypto?.pnl_today||0,p:d.poly?.pnl||0});
-  if(history.length>200)history.shift();
+  const balance=(d.crypto?.balance||d.crypto?.capital||70)+(d.poly?.equity||0);
+  history.push({t:Date.now(),v:balance,c:d.crypto?.balance||d.crypto?.capital||70,p:d.poly?.equity||0});
+  if(history.length>300)history.shift();
   if(!chart){
     chart=new Chart(document.getElementById('chart'),{type:'line',data:{labels:[],datasets:[
-      {label:'Total',data:[],borderColor:'#8b5cf6',backgroundColor:'rgba(139,92,246,.1)',fill:true,tension:.4,borderWidth:2},
-      {label:'Crypto',data:[],borderColor:'#10b981',borderWidth:1,tension:.4,pointRadius:0},
-      {label:'Poly',data:[],borderColor:'#f59e0b',borderWidth:1,tension:.4,pointRadius:0},
-    ]},options:{responsive:true,interaction:{intersect:false},plugins:{legend:{labels:{color:'#64748b',font:{size:11}}}},scales:{x:{display:false},y:{grid:{color:'#1e1e3a'},ticks:{color:'#64748b',callback:v=>'$'+v.toFixed(3)}}}}});
+      {label:'Balance Total',data:[],borderColor:'#8b5cf6',backgroundColor:'rgba(139,92,246,.1)',fill:true,tension:.4,borderWidth:2},
+      {label:'Crypto',data:[],borderColor:'#10b981',borderWidth:1.5,tension:.4,pointRadius:0},
+      {label:'Poly',data:[],borderColor:'#f59e0b',borderWidth:1.5,tension:.4,pointRadius:0},
+    ]},options:{responsive:true,animation:false,interaction:{intersect:false},plugins:{legend:{labels:{color:'#64748b',font:{size:11}}}},scales:{x:{display:false},y:{grid:{color:'#1e1e3a'},ticks:{color:'#64748b',callback:v=>'$'+v.toFixed(1)}}}}});
   }
   chart.data.labels=history.map((_,i)=>i);
   chart.data.datasets[0].data=history.map(h=>h.v);
@@ -214,7 +217,7 @@ function updateChart(d){
   chart.data.datasets[2].data=history.map(h=>h.p);
   chart.update('none');
 }
-load();setInterval(load,10000);
+load();setInterval(load,5000);
 </script>
 </body>
 </html>"""
