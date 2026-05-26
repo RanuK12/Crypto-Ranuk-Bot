@@ -33,9 +33,11 @@ def read_commands() -> dict:
 
 
 def save_state(risk, grid, momentum, ex):
+    grid_pnl = sum(g.pnl for g in grid.grids.values())
     state = {
         "capital": risk.capital, "pnl_today": risk.state.pnl_today,
-        "grid_pnl": sum(g.pnl for g in grid.grids.values()),
+        "balance": risk.capital + momentum.total_pnl + grid_pnl,
+        "grid_pnl": grid_pnl,
         "grid_fees": sum(g.fees for g in grid.grids.values()),
         "grid_trades": sum(g.trades for g in grid.grids.values()),
         "momentum_pnl": momentum.total_pnl, "momentum_fees": momentum.total_fees,
