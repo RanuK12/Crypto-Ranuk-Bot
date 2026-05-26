@@ -35,7 +35,7 @@ from ranuk.intelligence import Intelligence, TradeRecord
 
 MAX_POSITIONS = 8
 MAX_PER_SCAN = 3
-POSITION_SIZE_PCT = 0.05  # 5% of capital per trade ($3.50 on $70)
+POSITION_SIZE_PCT = 0.08  # 8% of capital per trade ($5.60 on $70)
 MIN_SCORE = 5.0  # Only high-quality (data shows lower scores = FLAT exits)
 
 
