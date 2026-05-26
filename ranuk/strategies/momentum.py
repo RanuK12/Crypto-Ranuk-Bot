@@ -151,7 +151,7 @@ class MomentumScanner:
 
         for g in gainers:
             sym = g["symbol"]
-            if sym in self.positions or sym in self.traded_today:
+            if sym in self.positions:
                 continue
             # Hard filters based on data
             if g["volume"] < 500_000:
