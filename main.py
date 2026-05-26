@@ -1,4 +1,4 @@
-"""Ranuk Profit Bot v5.2 — High-frequency scalp+swing + grid."""
+"""Ranuk Profit Bot v6 — Data-driven momentum + grid."""
 import asyncio, json, time, logging, os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,7 +7,8 @@ from ranuk.config import MODE, TOTAL_CAPITAL, IS_PAPER, SCAN_INTERVAL
 from ranuk.exchange import Exchange
 from ranuk.risk import RiskManager
 from ranuk.strategies.grid import GridTrader
-from ranuk.strategies.momentum import MomentumScanner
+from ranuk.strategies.momentum import MomentumScanner, POSITION_SIZE_PCT, MAX_POSITIONS
+import ranuk.strategies.momentum as mom_mod
 from ranuk import telegram
 from ranuk.reporter import generate_daily_report
 
@@ -15,10 +16,20 @@ logging.basicConfig(level=logging.INFO, format="%(message)s", handlers=[RichHand
 log = logging.getLogger("ranuk")
 STATE_FILE = Path(__file__).parent / "state.json"
 SHARED_STATE = Path("/app/shared/state.json")
+COMMANDS_FILE = Path("/app/shared/commands.json")
 
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN", "8895254248:AAGTy6NYZSphH1q6pa4SwHp2glTaraesgPI")
 TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 telegram.configure(TG_TOKEN, TG_CHAT_ID)
+
+
+def read_commands() -> dict:
+    try:
+        if COMMANDS_FILE.exists():
+            return json.loads(COMMANDS_FILE.read_text())
+    except Exception:
+        pass
+    return {}
 
 
 def save_state(risk, grid, momentum, ex):
@@ -58,20 +69,36 @@ def load_momentum_state(momentum):
 async def heartbeat(risk, grid, momentum, ex):
     last_report_day = ""
     await telegram.send_message(
-        f"🚀 <b>Ranuk Bot v5.2 started</b>\n"
+        f"🚀 <b>Ranuk Bot v6 started</b>\n"
         f"Mode: {MODE} | Capital: ${TOTAL_CAPITAL:.2f} | Scan: {SCAN_INTERVAL}s"
     )
     while True:
+        # Read commands from telegram bot
+        cmds = read_commands()
+        if cmds.get("paused"):
+            momentum._paused = True
+        else:
+            momentum._paused = False
+        # Apply capital/size changes
+        if "capital" in cmds:
+            new_cap = float(cmds["capital"])
+            if abs(new_cap - risk.capital) > 0.01:
+                risk.capital = new_cap
+                mom_mod.TOTAL_CAPITAL = new_cap
+        if "size_pct" in cmds:
+            mom_mod.POSITION_SIZE_PCT = float(cmds["size_pct"]) / 100.0
+
         state = save_state(risk, grid, momentum, ex)
         gpnl = state["grid_pnl"]
         gt = state["grid_trades"]
         wr = momentum.wins / max(1, momentum.wins + momentum.losses) * 100
+        paused_tag = " [PAUSED]" if cmds.get("paused") else ""
         log.info(
             f"💓 cap=${risk.capital:.2f} pnl=${risk.state.pnl_today:+.4f} "
             f"grid[t={gt} p=${gpnl:+.4f}] "
             f"mom[{len(momentum.positions)} open p=${momentum.total_pnl:+.4f} "
             f"W{momentum.wins}/L{momentum.losses} {wr:.0f}%] "
-            f"fees=${ex.total_fees_paid:.4f}"
+            f"fees=${ex.total_fees_paid:.4f}{paused_tag}"
         )
         now = datetime.now(timezone.utc)
         if now.hour == 21 and now.strftime("%Y-%m-%d") != last_report_day:
@@ -83,7 +110,7 @@ async def heartbeat(risk, grid, momentum, ex):
 
 
 async def main():
-    log.info(f"═══ RANUK PROFIT BOT v5.2 (scalp+swing) ═══")
+    log.info(f"═══ RANUK PROFIT BOT v6 (data-driven) ═══")
     log.info(f"  Mode: {MODE} | Capital: ${TOTAL_CAPITAL:.2f} | Scan: {SCAN_INTERVAL}s")
     ex = Exchange()
     risk = RiskManager()
