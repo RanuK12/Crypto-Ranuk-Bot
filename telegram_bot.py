@@ -176,7 +176,8 @@ async def cmd_status():
     c = _load_crypto()
     p = await _load_poly()
     cmds = _load_commands()
-    total = c.get("capital", 0) + p.get("equity", 0)
+    bal = c.get("balance", c.get("capital", 0))
+    total = bal + p.get("equity", 0)
     wr = c.get("momentum_wins", 0) / max(c.get("momentum_wins", 0) + c.get("momentum_losses", 0), 1) * 100
 
     # Daily stats
@@ -192,7 +193,7 @@ async def cmd_status():
         f"📊 <b>Estado General</b> [{paused}]\n\n"
         f"💰 Capital total: <b>${total:.2f}</b>\n\n"
         f"₿ <b>Crypto Bot</b> (🟢 {mode})\n"
-        f"  Capital: ${c.get('capital', 0):.2f}\n"
+        f"  Balance: ${bal:.2f}\n"
         f"  PnL hoy: ${c.get('pnl_today', 0):+.4f}\n"
         f"  Hoy: {today_w}W/{today_l}L\n"
         f"  Total: W{c.get('momentum_wins', 0)}/L{c.get('momentum_losses', 0)} ({wr:.0f}%)\n"
@@ -207,10 +208,11 @@ async def cmd_status():
 async def cmd_balance():
     c = _load_crypto()
     p = await _load_poly()
-    total = c.get("capital", 0) + p.get("equity", 0)
+    bal = c.get("balance", c.get("capital", 0))
+    total = bal + p.get("equity", 0)
     await send(
         f"💰 <b>Balance</b>\n\n"
-        f"₿ Crypto:     ${c.get('capital', 0):.2f}\n"
+        f"₿ Crypto:     ${bal:.2f}\n"
         f"🎯 Polymarket: ${p.get('equity', 0):.2f}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<b>TOTAL: ${total:.2f}</b>\n\n"
@@ -263,7 +265,7 @@ async def cmd_report():
     today_w = sum(1 for t in today if t["won"])
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    total = c.get("capital", 0) + p.get("equity", 0)
+    total = c.get("balance", c.get("capital", 0)) + p.get("equity", 0)
     wr = c.get("momentum_wins", 0) / max(c.get("momentum_wins", 0) + c.get("momentum_losses", 0), 1) * 100
 
     # Last 50 stats
