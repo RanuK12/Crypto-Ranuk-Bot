@@ -18,8 +18,8 @@ import aiohttp
 TRADE_SIZE = float(os.getenv("BTC_SNIPER_SIZE", "2.00"))  # USDC per trade
 ENTRY_SECONDS_BEFORE = 60  # Enter 60s before close
 MIN_PRICE_MOVE_PCT = 0.02  # Need at least 0.02% BTC move to have conviction
-MAKER_PRICE = 0.38  # Place maker order at 38¢ (profit 62¢ if wins, ~163% return)
-MAX_MAKER_PRICE = 0.40  # Max 40¢ (ensures ≥5 shares with $2.00)
+MAKER_PRICE = 0.55  # Target price 55¢ (profit 45¢ if wins, ~82% return)
+MAX_MAKER_PRICE = 0.65  # Max 65¢ — still profitable if wins
 MARKET_TYPE = "5m"  # "5m" or "15m"
 INTERVAL = 300 if MARKET_TYPE == "5m" else 900
 
@@ -112,28 +112,34 @@ class BTCSniper:
             return None, None, None
 
     async def _place_maker_order(self, token_id: str, size: float, price: float) -> dict:
-        """Place a limit (maker) order."""
+        """Place a market buy order (FOK) to fill immediately."""
         client = self._init_poly()
         if not client:
             return {"success": False, "error": "no client"}
 
         try:
-            from py_clob_client_v2.clob_types import OrderArgs, OrderType
+            from py_clob_client_v2.clob_types import MarketOrderArgs, OrderType
 
-            # Calculate shares: size_usdc / price = shares
-            shares = round(size / price, 2)
-
-            args = OrderArgs(
+            # MarketOrderArgs uses amount in USDC for BUY
+            args = MarketOrderArgs(
                 token_id=token_id,
-                price=price,
-                size=shares,
+                amount=float(round(size, 2)),
                 side="BUY",
+                price=price,
             )
-            resp = client.create_and_post_order(args, order_type=OrderType.GTC)
+            resp = client.create_and_post_market_order(args, order_type=OrderType.FOK)
             return {"success": True, "response": resp}
         except Exception as e:
-            print(f"[ERROR] Order failed: {e}")
-            return {"success": False, "error": str(e)}
+            # Fallback: try as limit GTC order
+            try:
+                from py_clob_client_v2.clob_types import OrderArgs, OrderType
+                shares = round(size / price, 2)
+                args = OrderArgs(token_id=token_id, price=price, size=shares, side="BUY")
+                resp = client.create_and_post_order(args, order_type=OrderType.GTC)
+                return {"success": True, "response": resp, "type": "limit"}
+            except Exception as e2:
+                print(f"[ERROR] Both order types failed: FOK={e} | GTC={e2}")
+                return {"success": False, "error": str(e2)}
 
     async def _check_orderbook(self, session: aiohttp.ClientSession, token_id: str) -> dict:
         """Check if there's liquidity to fill against."""
@@ -212,17 +218,16 @@ class BTCSniper:
             ob = await self._check_orderbook(session, token)
             asks = ob.get("asks", [])
 
-            # Determine entry price
+            # Determine entry price — use best ask if available
             if asks:
                 best_ask = float(asks[0]["price"])
-                entry_price = min(best_ask, MAX_MAKER_PRICE)
+                entry_price = best_ask  # Take the ask
+                if entry_price > MAX_MAKER_PRICE:
+                    print(f"   ⏭ Ask too high: ${entry_price:.3f} > ${MAX_MAKER_PRICE}")
+                    return
             else:
-                # No asks = we're the maker, place at our desired price
+                # No liquidity — place limit order at our price
                 entry_price = MAKER_PRICE
-
-            if entry_price > MAX_MAKER_PRICE:
-                print(f"   ⏭ Price too high: ${entry_price:.3f} > ${MAX_MAKER_PRICE}")
-                return
 
             # Place order
             print(f"   🎯 Placing {side_label} order: ${TRADE_SIZE} @ {entry_price:.3f}")
