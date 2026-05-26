@@ -97,10 +97,18 @@ class BTCSniper:
                 if not events:
                     return None, None, None
                 m = events[0]["markets"][0]
-                tokens = m["clobTokenIds"]
+                raw_tokens = m.get("clobTokenIds", "[]")
+                # clobTokenIds comes as a JSON string, not a list
+                if isinstance(raw_tokens, str):
+                    tokens = json.loads(raw_tokens)
+                else:
+                    tokens = raw_tokens
+                if len(tokens) < 2:
+                    return None, None, None
                 condition_id = m.get("conditionId", "")
                 return tokens[0], tokens[1], condition_id  # up_token, down_token, condition
-        except Exception:
+        except Exception as e:
+            print(f"[ERROR] Get market tokens: {e}")
             return None, None, None
 
     async def _place_maker_order(self, token_id: str, size: float, price: float) -> dict:
@@ -179,8 +187,8 @@ class BTCSniper:
             print(f"\n📊 New market window: {datetime.fromtimestamp(market_start, tz=timezone.utc).strftime('%H:%M')} - {datetime.fromtimestamp(market_end, tz=timezone.utc).strftime('%H:%M')} UTC")
             print(f"   BTC start price: ${self.btc_price:,.2f}")
 
-        # Entry window: 30-60s before close
-        if ENTRY_SECONDS_BEFORE - 5 <= time_to_close <= ENTRY_SECONDS_BEFORE + 5:
+        # Entry window: 30-90s before close (wide enough to not miss)
+        if 30 <= time_to_close <= 90 and not hasattr(self, f'_traded_{market_start}'):
             direction = self._get_direction()
             change_pct = (self.btc_price - self.btc_price_at_start) / self.btc_price_at_start * 100
 
@@ -225,6 +233,7 @@ class BTCSniper:
                 status = resp.get("status", "unknown") if isinstance(resp, dict) else str(resp)
                 print(f"   ✅ Order placed! Status: {status}")
                 self.trades_today += 1
+                setattr(self, f'_traded_{market_start}', True)
 
                 # Expected profit if wins
                 shares = TRADE_SIZE / entry_price
