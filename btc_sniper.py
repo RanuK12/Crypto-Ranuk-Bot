@@ -35,6 +35,8 @@ class BTCSniper:
     def __init__(self):
         self.btc_price: float = 0
         self.btc_price_at_start: float = 0
+        self.btc_price_1h_ago: float = 0
+        self._price_history: list[float] = []  # prices every 5s for trend
         self.current_market_start: int = 0
         self.wins = 0
         self.losses = 0
@@ -150,15 +152,22 @@ class BTCSniper:
             return {"bids": [], "asks": []}
 
     def _get_direction(self) -> str:
-        """Determine BTC direction — need STRONG consistent momentum."""
+        """Only trade when micro (5min) and macro (1h trend) AGREE."""
         if self.btc_price <= 0 or self.btc_price_at_start <= 0:
             return "unknown"
-        # Overall change since market start
-        change = (self.btc_price - self.btc_price_at_start) / self.btc_price_at_start
-        # Need at least 0.05% move (strong signal, not noise)
-        if change > 0.0005:
+        # Micro: change in this 5min window
+        micro_change = (self.btc_price - self.btc_price_at_start) / self.btc_price_at_start
+        # Macro: trend over last ~10min (120 samples at 5s = 10min)
+        if len(self._price_history) >= 60:
+            macro_price = self._price_history[-60]  # 5min ago
+            macro_change = (self.btc_price - macro_price) / macro_price
+        else:
+            macro_change = micro_change
+
+        # Need BOTH micro and macro to agree, and micro must be strong
+        if micro_change > 0.0005 and macro_change > 0.0003:
             return "up"
-        elif change < -0.0005:
+        elif micro_change < -0.0005 and macro_change < -0.0003:
             return "down"
         return "flat"
 
@@ -187,6 +196,9 @@ class BTCSniper:
 
         # Update BTC price
         self.btc_price = await self._get_btc_price(session)
+        self._price_history.append(self.btc_price)
+        if len(self._price_history) > 720:  # Keep 1h of data (720 × 5s)
+            self._price_history = self._price_history[-720:]
 
         # Track price at market start
         if market_start != self.current_market_start:
