@@ -166,9 +166,9 @@ class BTCSniper:
             macro_change = micro_change
 
         # Need BOTH micro and macro to agree, and micro must be strong
-        if micro_change > 0.0005 and macro_change > 0.0003:
+        if micro_change > 0.0004 and macro_change > 0.0001:
             return "up"
-        elif micro_change < -0.0005 and macro_change < -0.0003:
+        elif micro_change < -0.0004 and macro_change < -0.0001:
             return "down"
         return "flat"
 
