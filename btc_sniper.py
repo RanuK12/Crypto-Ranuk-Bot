@@ -156,11 +156,21 @@ class BTCSniper:
         """Only trade when micro (5min) and macro (1h trend) AGREE."""
         if self.btc_price <= 0 or self.btc_price_at_start <= 0:
             return "unknown"
+
+        # VOLATILITY GATE: if BTC moved less than 0.15% in last 5min of history, skip
+        if len(self._price_history) >= 60:
+            recent_prices = self._price_history[-60:]
+            high = max(recent_prices)
+            low = min(recent_prices)
+            volatility = (high - low) / low
+            if volatility < 0.0015:  # Less than 0.15% range = too flat
+                return "flat"
+
         # Micro: change in this 5min window
         micro_change = (self.btc_price - self.btc_price_at_start) / self.btc_price_at_start
-        # Macro: trend over last ~10min (120 samples at 5s = 10min)
+        # Macro: trend over last ~5min
         if len(self._price_history) >= 60:
-            macro_price = self._price_history[-60]  # 5min ago
+            macro_price = self._price_history[-60]
             macro_change = (self.btc_price - macro_price) / macro_price
         else:
             macro_change = micro_change
