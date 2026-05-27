@@ -15,12 +15,12 @@ from pathlib import Path
 import aiohttp
 
 # Config
-TRADE_SIZE = float(os.getenv("BTC_SNIPER_SIZE", "1.00"))  # USDC per trade
+TRADE_SIZE = float(os.getenv("BTC_SNIPER_SIZE", "0.25"))  # $0.25 per trade, 33x return = $8.33 if wins
 ENTRY_SECONDS_BEFORE = 60  # Enter 60s before close
-MIN_PRICE_MOVE_PCT = 0.02  # Need at least 0.02% BTC move to have conviction
-MAKER_PRICE = 0.18  # 18¢ — this is where fills actually happen (456% if wins)
-MAX_MAKER_PRICE = 0.22  # Max 22¢
-TP_MULTIPLIER = 4.0  # Sell at 4x entry (e.g. 0.18 → 0.72) — let winners run to resolution
+MIN_PRICE_MOVE_PCT = 0.02
+MAKER_PRICE = 0.03  # 3¢ — matches existing bids in orderbook, 33x if wins
+MAX_MAKER_PRICE = 0.05  # Max 5¢
+TP_MULTIPLIER = 10.0  # Let it run to resolution for max payout
 MARKET_TYPE = "5m"  # "5m" or "15m"
 INTERVAL = 300 if MARKET_TYPE == "5m" else 900
 
