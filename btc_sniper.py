@@ -150,13 +150,15 @@ class BTCSniper:
             return {"bids": [], "asks": []}
 
     def _get_direction(self) -> str:
-        """Determine BTC direction based on price change since market start."""
+        """Determine BTC direction — need STRONG consistent momentum."""
         if self.btc_price <= 0 or self.btc_price_at_start <= 0:
             return "unknown"
-        change_pct = (self.btc_price - self.btc_price_at_start) / self.btc_price_at_start
-        if change_pct > 0.0001:  # Any positive move = up
+        # Overall change since market start
+        change = (self.btc_price - self.btc_price_at_start) / self.btc_price_at_start
+        # Need at least 0.05% move (strong signal, not noise)
+        if change > 0.0005:
             return "up"
-        elif change_pct < -0.0001:  # Any negative move = down
+        elif change < -0.0005:
             return "down"
         return "flat"
 
@@ -193,8 +195,8 @@ class BTCSniper:
             print(f"\n📊 New market window: {datetime.fromtimestamp(market_start, tz=timezone.utc).strftime('%H:%M')} - {datetime.fromtimestamp(market_end, tz=timezone.utc).strftime('%H:%M')} UTC")
             print(f"   BTC start price: ${self.btc_price:,.2f}")
 
-        # Entry window: 120-180s before close (earlier = better prices)
-        if 120 <= time_to_close <= 180 and not hasattr(self, f'_traded_{market_start}'):
+        # Entry window: 60-120s before close
+        if 60 <= time_to_close <= 120 and not hasattr(self, f'_traded_{market_start}'):
             direction = self._get_direction()
             change_pct = (self.btc_price - self.btc_price_at_start) / self.btc_price_at_start * 100
 
