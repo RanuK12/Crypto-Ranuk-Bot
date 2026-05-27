@@ -15,11 +15,12 @@ from pathlib import Path
 import aiohttp
 
 # Config
-TRADE_SIZE = float(os.getenv("BTC_SNIPER_SIZE", "2.50"))  # USDC per trade
+TRADE_SIZE = float(os.getenv("BTC_SNIPER_SIZE", "1.00"))  # USDC per trade
 ENTRY_SECONDS_BEFORE = 60  # Enter 60s before close
 MIN_PRICE_MOVE_PCT = 0.02  # Need at least 0.02% BTC move to have conviction
 MAKER_PRICE = 0.40  # 40¢ — good fill rate, 150% profit if wins
 MAX_MAKER_PRICE = 0.50  # Max 50¢ (ensures ≥5 shares with $2.50)
+TP_MULTIPLIER = 2.0  # Sell when token price doubles (100% profit)
 MARKET_TYPE = "5m"  # "5m" or "15m"
 INTERVAL = 300 if MARKET_TYPE == "5m" else 900
 
@@ -256,6 +257,13 @@ class BTCSniper:
                 self.trades_today += 1
                 setattr(self, f'_traded_{market_start}', True)
 
+                # Track position for TP monitoring
+                if status == "matched" or status == "live":
+                    self._active_position = {
+                        "token_id": token, "entry_price": entry_price,
+                        "shares": TRADE_SIZE / entry_price, "side": side_label,
+                    }
+
                 # Expected profit if wins
                 shares = TRADE_SIZE / entry_price
                 profit = shares * (1.0 - entry_price)
@@ -264,6 +272,33 @@ class BTCSniper:
                 print(f"   ❌ Order failed: {result.get('error', 'unknown')}")
 
             self._save_state()
+
+        # TP Monitor: check if active position hit take-profit
+        if hasattr(self, '_active_position') and self._active_position:
+            pos = self._active_position
+            try:
+                ob = await self._check_orderbook(session, pos["token_id"])
+                bids = ob.get("bids", [])
+                if bids:
+                    best_bid = float(bids[0]["price"])
+                    tp_price = pos["entry_price"] * TP_MULTIPLIER
+                    if best_bid >= tp_price:
+                        # SELL! Take profit
+                        print(f"   💰 TP HIT! {pos['side']} bid={best_bid:.3f} >= tp={tp_price:.3f}")
+                        from bot.clients.polymarket import get_poly
+                        poly = get_poly()
+                        result = poly.sell_position(token_id=pos["token_id"], shares=pos["shares"])
+                        if result.get("success"):
+                            profit = pos["shares"] * (best_bid - pos["entry_price"])
+                            print(f"   🎉 SOLD! Profit: +${profit:.2f}")
+                            self.wins += 1
+                            self.total_pnl += profit
+                        else:
+                            print(f"   ⚠️ Sell failed: {result.get('error','')[:50]}")
+                        self._active_position = None
+                        self._save_state()
+            except Exception:
+                pass
 
 
 async def main():
