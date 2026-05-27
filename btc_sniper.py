@@ -15,11 +15,11 @@ from pathlib import Path
 import aiohttp
 
 # Config
-TRADE_SIZE = float(os.getenv("BTC_SNIPER_SIZE", "1.00"))  # USDC per trade
+TRADE_SIZE = float(os.getenv("BTC_SNIPER_SIZE", "2.50"))  # USDC per trade
 ENTRY_SECONDS_BEFORE = 60  # Enter 60s before close
 MIN_PRICE_MOVE_PCT = 0.02  # Need at least 0.02% BTC move to have conviction
-MAKER_PRICE = 0.18  # Place maker order at 18¢ (profit 82¢ if wins, ~455% return)
-MAX_MAKER_PRICE = 0.20  # Max 20¢ (ensures ≥5 shares with $1.00)
+MAKER_PRICE = 0.40  # 40¢ — good fill rate, 150% profit if wins
+MAX_MAKER_PRICE = 0.50  # Max 50¢ (ensures ≥5 shares with $2.50)
 MARKET_TYPE = "5m"  # "5m" or "15m"
 INTERVAL = 300 if MARKET_TYPE == "5m" else 900
 
