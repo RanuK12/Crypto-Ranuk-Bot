@@ -60,7 +60,7 @@ class Position:
 
     @property
     def sl_pct(self) -> float:
-        return 0.008 if self.mode == "scalp" else 0.015
+        return 0.006 if self.mode == "scalp" else 0.012  # tighter SL: 1.2% (was 1.5%)
 
     @property
     def timeout(self) -> float:
@@ -71,13 +71,13 @@ class Position:
         gain = (self.highest - self.entry_price) / self.entry_price
         if self.mode == "scalp":
             if gain >= 0.008:
-                return self.highest * (1 - 0.004)
+                return self.highest * (1 - 0.003)
             return self.entry_price * (1 - self.sl_pct)
         else:
-            if gain >= 0.03:
-                return self.highest * (1 - 0.012)
-            elif gain >= 0.015:
-                return self.highest * (1 - 0.008)
+            if gain >= 0.02:
+                return self.highest * (1 - 0.008)  # tighter trail to lock profit
+            elif gain >= 0.01:
+                return self.highest * (1 - 0.006)
             return self.entry_price * (1 - self.sl_pct)
 
 
