@@ -89,6 +89,7 @@ class MomentumScanner:
         self.positions: dict[str, Position] = {}
         self.traded_today: set[str] = set()
         self._traded_day: str = ""
+        self._cooldowns: dict[str, float] = {}  # symbol -> timestamp when can trade again
         self.total_pnl: float = 0.0
         self.total_fees: float = 0.0
         self.wins: int = 0
@@ -152,6 +153,9 @@ class MomentumScanner:
         for g in gainers:
             sym = g["symbol"]
             if sym in self.positions:
+                continue
+            # 1h cooldown after trading a token (prevents re-entry into falling tokens)
+            if sym in self._cooldowns and time.time() < self._cooldowns[sym]:
                 continue
             # Hard filters based on data
             if g["volume"] < 500_000:
@@ -274,6 +278,7 @@ class MomentumScanner:
                     won=won,
                 ))
                 del self.positions[sym]
+                self._cooldowns[sym] = time.time() + 3600  # 1h cooldown
                 exits.append({"symbol": sym, "reason": reason, "pnl": net_pnl,
                              "pnl_pct": pnl_pct, "fee": sell_fee, "mode": pos.mode})
         return exits
