@@ -160,7 +160,8 @@ class MultiSniper:
 
         async with aiohttp.ClientSession() as session:
             await self._get_prices(session)
-            print(f"   Prices: {', '.join(f'{a[\"name\"]}=${self.prices.get(a[\"symbol\"],0):,.2f}' for a in ASSETS)}")
+            prices_str = " ".join(f"{a['name']}=${self.prices.get(a['symbol'],0):,.2f}" for a in ASSETS)
+            print(f"   Prices: {prices_str}")
 
             while True:
                 try:
@@ -183,7 +184,8 @@ class MultiSniper:
             self.traded_this_window = set()
             self.prices_at_start = dict(self.prices)
             t = datetime.fromtimestamp(market_start, tz=timezone.utc).strftime('%H:%M')
-            print(f"\n📊 [{t}] New window | " + " ".join(f"{a['name']}=${self.prices.get(a['symbol'],0):,.1f}" for a in ASSETS))
+            prices_str = " ".join(f"{a['name']}=${self.prices.get(a['symbol'],0):,.1f}" for a in ASSETS)
+            print(f"\n📊 [{t}] New window | {prices_str}")
 
         # Entry window: 60-120s before close
         if not (60 <= time_to_close <= 120):
