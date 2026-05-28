@@ -60,7 +60,7 @@ class Position:
 
     @property
     def sl_pct(self) -> float:
-        return 0.006 if self.mode == "scalp" else 0.012  # tighter SL: 1.2% (was 1.5%)
+        return 0.006 if self.mode == "scalp" else 0.018  # wider SL: 1.8% (1.2% was too tight, 18 SL hits)
 
     @property
     def timeout(self) -> float:
