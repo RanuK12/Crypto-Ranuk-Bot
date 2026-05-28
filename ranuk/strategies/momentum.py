@@ -60,7 +60,7 @@ class Position:
 
     @property
     def sl_pct(self) -> float:
-        return 0.006 if self.mode == "scalp" else 0.018  # wider SL: 1.8% (1.2% was too tight, 18 SL hits)
+        return 0.006 if self.mode == "scalp" else 0.015  # 1.5% SL
 
     @property
     def timeout(self) -> float:
@@ -74,10 +74,12 @@ class Position:
                 return self.highest * (1 - 0.003)
             return self.entry_price * (1 - self.sl_pct)
         else:
-            if gain >= 0.02:
-                return self.highest * (1 - 0.008)  # tighter trail to lock profit
-            elif gain >= 0.01:
-                return self.highest * (1 - 0.006)
+            # Looser trailing — let winners run to TP more often
+            # Only trail after +2% gain, with 1.2% distance
+            if gain >= 0.025:
+                return self.highest * (1 - 0.010)
+            elif gain >= 0.015:
+                return self.highest * (1 - 0.012)
             return self.entry_price * (1 - self.sl_pct)
 
 
