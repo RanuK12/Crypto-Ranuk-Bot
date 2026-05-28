@@ -19,12 +19,10 @@ MAX_MAKER_PRICE = 0.22
 INTERVAL = 300  # 5min markets
 MIN_VOLATILITY = 0.0015  # 0.15% range in 5min required
 
-# Assets: (symbol for Binance, slug prefix for Polymarket)
+# Assets: only BTC and ETH (SOL/XRP had 0% WR on 20 trades = -$20 lost)
 ASSETS = [
     {"symbol": "BTCUSDT", "slug": "btc-updown-5m", "name": "BTC"},
     {"symbol": "ETHUSDT", "slug": "eth-updown-5m", "name": "ETH"},
-    {"symbol": "SOLUSDT", "slug": "sol-updown-5m", "name": "SOL"},
-    {"symbol": "XRPUSDT", "slug": "xrp-updown-5m", "name": "XRP"},
 ]
 
 CLOB_HOST = "https://clob.polymarket.com"
