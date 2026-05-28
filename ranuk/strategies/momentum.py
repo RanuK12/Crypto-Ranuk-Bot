@@ -98,6 +98,8 @@ class MomentumScanner:
         self.losses: int = 0
         self._last_prices: dict[str, list[float]] = {}
         self._paused: bool = False
+        self._fear_greed: int = 50
+        self._fg_last_check: float = 0
 
     def _reset_traded_today(self):
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -142,12 +144,39 @@ class MomentumScanner:
             elif len(prices) >= 2 and prices[-1] < prices[-2]:
                 score += 1.0
 
+        # Fear & Greed adjustment
+        # In Fear (<30): pumps are real momentum, bonus
+        # In Greed (>70): pumps are often traps, penalty
+        if self._fear_greed < 25:
+            score += 1.5  # Extreme fear = pumps are strong
+        elif self._fear_greed < 40:
+            score += 0.5  # Fear = slight bonus
+        elif self._fear_greed > 75:
+            score -= 1.5  # Extreme greed = pumps are traps
+
         return score, mode
+
+    async def _fetch_fear_greed(self):
+        """Fetch crypto Fear & Greed index every 30min."""
+        if time.time() - self._fg_last_check < 1800:
+            return
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as s:
+                async with s.get("https://api.alternative.me/fng/?limit=1", timeout=aiohttp.ClientTimeout(total=5)) as r:
+                    data = await r.json(content_type=None)
+                    self._fear_greed = int(data["data"][0]["value"])
+                    self._fg_last_check = time.time()
+        except Exception:
+            pass
 
     async def scan_once(self) -> list[dict]:
         self._reset_traded_today()
         if self._paused or len(self.positions) >= MAX_POSITIONS:
             return []
+
+        # Update Fear & Greed index (every 30min)
+        await self._fetch_fear_greed()
 
         gainers = await self.ex.top_gainers(80)
         opps = []
