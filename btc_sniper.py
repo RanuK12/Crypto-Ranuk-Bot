@@ -19,9 +19,8 @@ MAX_MAKER_PRICE = 0.22
 INTERVAL = 300  # 5min markets
 MIN_VOLATILITY = 0.0015  # 0.15% range in 5min required
 
-# Assets: only BTC and ETH (SOL/XRP had 0% WR on 20 trades = -$20 lost)
+# Assets: only ETH (25% WR = profitable). BTC 13%, SOL 9%, XRP 12% = all losers
 ASSETS = [
-    {"symbol": "BTCUSDT", "slug": "btc-updown-5m", "name": "BTC"},
     {"symbol": "ETHUSDT", "slug": "eth-updown-5m", "name": "ETH"},
 ]
 
