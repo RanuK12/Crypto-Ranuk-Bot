@@ -21,8 +21,8 @@ MIN_VOLATILITY = 0.0015  # 0.15% range in 5min required
 
 # Assets: ETH (25% WR) + BTC with stricter threshold and later entry
 ASSETS = [
-    {"symbol": "BTCUSDT", "slug": "btc-updown-5m", "name": "BTC", "min_move": 0.001, "entry_window": (20, 50), "bias": "down"},  # 3/4 top wallets bearish
-    {"symbol": "ETHUSDT", "slug": "eth-updown-5m", "name": "ETH", "min_move": 0.0004, "entry_window": (60, 120), "bias": "up"},  # 2/4 top wallets bullish
+    {"symbol": "BTCUSDT", "slug": "btc-updown-5m", "name": "BTC", "min_move": 0.001, "entry_window": (20, 50)},
+    {"symbol": "ETHUSDT", "slug": "eth-updown-5m", "name": "ETH", "min_move": 0.0004, "entry_window": (60, 120)},
 ]
 
 CLOB_HOST = "https://clob.polymarket.com"
