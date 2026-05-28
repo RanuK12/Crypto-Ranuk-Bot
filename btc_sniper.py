@@ -19,10 +19,10 @@ MAX_MAKER_PRICE = 0.22
 INTERVAL = 300  # 5min markets
 MIN_VOLATILITY = 0.0015  # 0.15% range in 5min required
 
-# Assets: ETH (25% WR) + BTC with stricter threshold
+# Assets: ETH (25% WR) + BTC with stricter threshold and later entry
 ASSETS = [
-    {"symbol": "BTCUSDT", "slug": "btc-updown-5m", "name": "BTC", "min_move": 0.0008},  # needs 0.08% (stricter)
-    {"symbol": "ETHUSDT", "slug": "eth-updown-5m", "name": "ETH", "min_move": 0.0004},  # 0.04% (current)
+    {"symbol": "BTCUSDT", "slug": "btc-updown-5m", "name": "BTC", "min_move": 0.001, "entry_window": (20, 50)},  # enter 20-50s before close (later = more certain)
+    {"symbol": "ETHUSDT", "slug": "eth-updown-5m", "name": "ETH", "min_move": 0.0004, "entry_window": (60, 120)},  # 60-120s (current)
 ]
 
 CLOB_HOST = "https://clob.polymarket.com"
@@ -196,12 +196,13 @@ class MultiSniper:
             prices_str = " ".join(f"{a['name']}=${self.prices.get(a['symbol'],0):,.1f}" for a in ASSETS)
             print(f"\n📊 [{t}] New window | {prices_str}")
 
-        # Entry window: 60-120s before close
-        if not (60 <= time_to_close <= 120):
-            return
-
+        # Entry check per asset (each has its own timing window)
         for asset in ASSETS:
             if asset["name"] in self.traded_this_window:
+                continue
+
+            entry_lo, entry_hi = asset.get("entry_window", (60, 120))
+            if not (entry_lo <= time_to_close <= entry_hi):
                 continue
 
             direction = self._check_signal(asset["symbol"], asset.get("min_move", 0.0004))
