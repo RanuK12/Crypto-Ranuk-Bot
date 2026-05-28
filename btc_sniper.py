@@ -39,6 +39,7 @@ class MultiSniper:
         self.price_history: dict[str, list[float]] = {a["symbol"]: [] for a in ASSETS}
         self.current_market_start: int = 0
         self.traded_this_window: set[str] = set()
+        self.active_positions: list[dict] = []  # {token_id, entry_price, shares, highest_price, name}
         self.wins = 0
         self.losses = 0
         self.total_pnl = 0.0
@@ -126,6 +127,16 @@ class MultiSniper:
                 return {"success": True, "response": resp, "status": status}
             except Exception as e:
                 return {"success": False, "error": str(e)}
+
+    async def _sell_position(self, token_id: str, shares: float) -> dict:
+        """Sell position to lock in profit."""
+        try:
+            from bot.clients.polymarket import get_poly
+            poly = get_poly()
+            result = poly.sell_position(token_id=token_id, shares=round(shares, 2))
+            return result
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     def _check_signal(self, symbol: str) -> str:
         """Check if asset has clear direction with enough volatility."""
@@ -225,12 +236,54 @@ class MultiSniper:
             result = await self._place_order(token, TRADE_SIZE, entry_price)
             if result.get("success"):
                 self.traded_this_window.add(asset["name"])
-                profit = (TRADE_SIZE / entry_price) * (1 - entry_price)
+                shares = TRADE_SIZE / entry_price
+                profit = shares * (1 - entry_price)
                 print(f"   ✅ {result['status']} | If wins: +${profit:.2f} ({(1/entry_price-1)*100:.0f}%)")
+                # Track position for trailing TP
+                self.active_positions.append({
+                    "token_id": token, "entry_price": entry_price,
+                    "shares": shares, "highest_price": entry_price,
+                    "name": asset["name"], "side": side,
+                })
             else:
                 print(f"   ❌ {result.get('error','')[:40]}")
 
             self._save_state()
+
+        # === TRAILING TP MONITOR ===
+        for pos in list(self.active_positions):
+            try:
+                async with session.get(f"{CLOB_HOST}/book?token_id={pos['token_id']}", timeout=aiohttp.ClientTimeout(total=3)) as r:
+                    ob = await r.json()
+                bids = ob.get("bids", [])
+                if not bids:
+                    continue
+                best_bid = float(bids[0]["price"])
+
+                # Update highest
+                if best_bid > pos["highest_price"]:
+                    pos["highest_price"] = best_bid
+
+                gain_from_entry = (best_bid - pos["entry_price"]) / pos["entry_price"]
+                drop_from_high = (pos["highest_price"] - best_bid) / pos["highest_price"] if pos["highest_price"] > 0 else 0
+
+                # Trailing TP: if was up 100%+ and dropped 30% from peak → SELL
+                if pos["highest_price"] >= pos["entry_price"] * 2.0 and drop_from_high >= 0.30:
+                    print(f"   💰 TRAILING TP! {pos['name']} {pos['side']} | peak={pos['highest_price']:.3f} now={best_bid:.3f} (-{drop_from_high*100:.0f}%)")
+                    sell_result = await self._sell_position(pos["token_id"], pos["shares"])
+                    if sell_result.get("success"):
+                        profit = pos["shares"] * (best_bid - pos["entry_price"])
+                        self.total_pnl += profit
+                        self.wins += 1
+                        print(f"   🎉 SOLD! Profit: +${profit:.2f}")
+                    self.active_positions.remove(pos)
+                    self._save_state()
+            except Exception:
+                pass
+
+        # Clean expired positions (market resolved)
+        if time_to_close > 290:  # New window started, clear old positions
+            self.active_positions = []
 
 
 if __name__ == "__main__":
