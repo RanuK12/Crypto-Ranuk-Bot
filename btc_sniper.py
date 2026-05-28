@@ -19,9 +19,10 @@ MAX_MAKER_PRICE = 0.22
 INTERVAL = 300  # 5min markets
 MIN_VOLATILITY = 0.0015  # 0.15% range in 5min required
 
-# Assets: only ETH (25% WR = profitable). BTC 13%, SOL 9%, XRP 12% = all losers
+# Assets: ETH (25% WR) + BTC with stricter threshold
 ASSETS = [
-    {"symbol": "ETHUSDT", "slug": "eth-updown-5m", "name": "ETH"},
+    {"symbol": "BTCUSDT", "slug": "btc-updown-5m", "name": "BTC", "min_move": 0.0008},  # needs 0.08% (stricter)
+    {"symbol": "ETHUSDT", "slug": "eth-updown-5m", "name": "ETH", "min_move": 0.0004},  # 0.04% (current)
 ]
 
 CLOB_HOST = "https://clob.polymarket.com"
@@ -135,7 +136,7 @@ class MultiSniper:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def _check_signal(self, symbol: str) -> str:
+    def _check_signal(self, symbol: str, min_move: float = 0.0004) -> str:
         """Check if asset has clear direction with enough volatility."""
         price = self.prices.get(symbol, 0)
         start_price = self.prices_at_start.get(symbol, 0)
@@ -157,9 +158,9 @@ class MultiSniper:
         if len(history) >= 60:
             macro = (price - history[-60]) / history[-60]
 
-        if micro > 0.0004 and macro > 0.0001:
+        if micro > min_move and macro > min_move * 0.25:
             return "up"
-        elif micro < -0.0004 and macro < -0.0001:
+        elif micro < -min_move and macro < -min_move * 0.25:
             return "down"
         return "flat"
 
@@ -203,7 +204,7 @@ class MultiSniper:
             if asset["name"] in self.traded_this_window:
                 continue
 
-            direction = self._check_signal(asset["symbol"])
+            direction = self._check_signal(asset["symbol"], asset.get("min_move", 0.0004))
             if direction == "flat":
                 continue
 
