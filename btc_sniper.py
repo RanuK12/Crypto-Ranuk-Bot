@@ -1,9 +1,7 @@
-"""BTC Up/Down Sniper — Polymarket 5min/15min markets.
+"""Multi-Crypto Up/Down Sniper — BTC, ETH, SOL, XRP on Polymarket 5min markets.
 
-Strategy: Detect BTC direction via Binance price, place maker order
-on the winning side 30-60s before market close.
-
-@marketing101 style but adapted for $3.35 capital.
+Operates on 4 assets simultaneously = 4x more opportunities.
+Only enters when volatility is high (learned from May 26 vs May 27).
 """
 import asyncio
 import time
@@ -15,34 +13,35 @@ from pathlib import Path
 import aiohttp
 
 # Config
-TRADE_SIZE = float(os.getenv("BTC_SNIPER_SIZE", "1.00"))  # $0.25 per trade, 33x return = $8.33 if wins
-ENTRY_SECONDS_BEFORE = 60  # Enter 60s before close
-MIN_PRICE_MOVE_PCT = 0.02
-MAKER_PRICE = 0.18  # 3¢ — matches existing bids in orderbook, 33x if wins
-MAX_MAKER_PRICE = 0.22  # Max 5¢
-TP_MULTIPLIER = 4.0  # Let it run to resolution for max payout
-MARKET_TYPE = "5m"  # "5m" or "15m"
-INTERVAL = 300 if MARKET_TYPE == "5m" else 900
+TRADE_SIZE = float(os.getenv("SNIPER_SIZE", "1.00"))
+MAKER_PRICE = 0.18
+MAX_MAKER_PRICE = 0.22
+INTERVAL = 300  # 5min markets
+MIN_VOLATILITY = 0.0015  # 0.15% range in 5min required
 
-# Polymarket
+# Assets: (symbol for Binance, slug prefix for Polymarket)
+ASSETS = [
+    {"symbol": "BTCUSDT", "slug": "btc-updown-5m", "name": "BTC"},
+    {"symbol": "ETHUSDT", "slug": "eth-updown-5m", "name": "ETH"},
+    {"symbol": "SOLUSDT", "slug": "sol-updown-5m", "name": "SOL"},
+    {"symbol": "XRPUSDT", "slug": "xrp-updown-5m", "name": "XRP"},
+]
+
 CLOB_HOST = "https://clob.polymarket.com"
 GAMMA_HOST = "https://gamma-api.polymarket.com"
-BINANCE_WS = "wss://stream.binance.com:9443/ws/btcusdt@ticker"
-
-STATE_FILE = Path("/app/shared/btc_sniper_state.json")
+STATE_FILE = Path("/app/shared/sniper_state.json")
 
 
-class BTCSniper:
+class MultiSniper:
     def __init__(self):
-        self.btc_price: float = 0
-        self.btc_price_at_start: float = 0
-        self.btc_price_1h_ago: float = 0
-        self._price_history: list[float] = []  # prices every 5s for trend
+        self.prices: dict[str, float] = {}
+        self.prices_at_start: dict[str, float] = {}
+        self.price_history: dict[str, list[float]] = {a["symbol"]: [] for a in ASSETS}
         self.current_market_start: int = 0
+        self.traded_this_window: set[str] = set()
         self.wins = 0
         self.losses = 0
         self.total_pnl = 0.0
-        self.trades_today = 0
         self.poly_client = None
         self._load_state()
 
@@ -61,260 +60,176 @@ class BTCSniper:
             STATE_FILE.write_text(json.dumps({
                 "wins": self.wins, "losses": self.losses,
                 "total_pnl": self.total_pnl,
-                "trades_today": self.trades_today,
-                "last_btc": self.btc_price,
+                "last_prices": self.prices,
                 "updated_at": time.time(),
             }, indent=2))
         except Exception:
             pass
 
     def _init_poly(self):
-        """Initialize Polymarket CLOB client."""
         if self.poly_client:
             return self.poly_client
         try:
             from bot.config import CFG
             from bot.clients.polymarket import get_poly
-            poly = get_poly()
-            self.poly_client = poly.clob()
+            self.poly_client = get_poly().clob()
             return self.poly_client
         except Exception as e:
-            print(f"[ERROR] Failed to init poly client: {e}")
+            print(f"[ERROR] Poly init: {e}")
             return None
 
-    async def _get_btc_price(self, session: aiohttp.ClientSession) -> float:
-        """Get current BTC price from Binance REST."""
+    async def _get_prices(self, session: aiohttp.ClientSession):
+        """Get all crypto prices from Binance in one call."""
         try:
-            async with session.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=aiohttp.ClientTimeout(total=5)) as r:
+            async with session.get("https://api.binance.com/api/v3/ticker/price", timeout=aiohttp.ClientTimeout(total=5)) as r:
                 data = await r.json()
-                return float(data["price"])
+                price_map = {t["symbol"]: float(t["price"]) for t in data}
+                for asset in ASSETS:
+                    if asset["symbol"] in price_map:
+                        self.prices[asset["symbol"]] = price_map[asset["symbol"]]
+                        self.price_history[asset["symbol"]].append(price_map[asset["symbol"]])
+                        if len(self.price_history[asset["symbol"]]) > 720:
+                            self.price_history[asset["symbol"]] = self.price_history[asset["symbol"]][-720:]
         except Exception:
-            return self.btc_price
+            pass
 
-    async def _get_market_tokens(self, session: aiohttp.ClientSession, timestamp: int) -> tuple:
-        """Get Up/Down token IDs for a market."""
-        slug = f"btc-updown-{MARKET_TYPE}-{timestamp}"
+    async def _get_market_tokens(self, session: aiohttp.ClientSession, slug_prefix: str, timestamp: int):
+        slug = f"{slug_prefix}-{timestamp}"
         try:
             async with session.get(f"{GAMMA_HOST}/events?slug={slug}", timeout=aiohttp.ClientTimeout(total=5)) as r:
                 events = await r.json()
                 if not events:
-                    return None, None, None
+                    return None, None
                 m = events[0]["markets"][0]
-                raw_tokens = m.get("clobTokenIds", "[]")
-                # clobTokenIds comes as a JSON string, not a list
-                if isinstance(raw_tokens, str):
-                    tokens = json.loads(raw_tokens)
-                else:
-                    tokens = raw_tokens
-                if len(tokens) < 2:
-                    return None, None, None
-                condition_id = m.get("conditionId", "")
-                return tokens[0], tokens[1], condition_id  # up_token, down_token, condition
-        except Exception as e:
-            print(f"[ERROR] Get market tokens: {e}")
-            return None, None, None
+                raw = m.get("clobTokenIds", "[]")
+                tokens = json.loads(raw) if isinstance(raw, str) else raw
+                return tokens[0], tokens[1] if len(tokens) >= 2 else (None, None)
+        except Exception:
+            return None, None
 
-    async def _place_maker_order(self, token_id: str, size: float, price: float) -> dict:
-        """Place a market buy order (FOK) to fill immediately."""
+    async def _place_order(self, token_id: str, size: float, price: float) -> dict:
         client = self._init_poly()
         if not client:
-            return {"success": False, "error": "no client"}
-
+            return {"success": False}
         try:
             from py_clob_client_v2.clob_types import MarketOrderArgs, OrderType
-
-            # MarketOrderArgs uses amount in USDC for BUY
-            args = MarketOrderArgs(
-                token_id=token_id,
-                amount=float(round(size, 2)),
-                side="BUY",
-                price=price,
-            )
+            args = MarketOrderArgs(token_id=token_id, amount=float(round(size, 2)), side="BUY", price=price)
             resp = client.create_and_post_market_order(args, order_type=OrderType.FOK)
-            return {"success": True, "response": resp}
-        except Exception as e:
-            # Fallback: try as limit GTC order
+            return {"success": True, "response": resp, "status": "matched"}
+        except Exception:
             try:
                 from py_clob_client_v2.clob_types import OrderArgs, OrderType
                 shares = round(size / price, 2)
                 args = OrderArgs(token_id=token_id, price=price, size=shares, side="BUY")
                 resp = client.create_and_post_order(args, order_type=OrderType.GTC)
-                return {"success": True, "response": resp, "type": "limit"}
-            except Exception as e2:
-                print(f"[ERROR] Both order types failed: FOK={e} | GTC={e2}")
-                return {"success": False, "error": str(e2)}
+                status = resp.get("status", "live") if isinstance(resp, dict) else "live"
+                return {"success": True, "response": resp, "status": status}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
 
-    async def _check_orderbook(self, session: aiohttp.ClientSession, token_id: str) -> dict:
-        """Check if there's liquidity to fill against."""
-        try:
-            async with session.get(f"{CLOB_HOST}/book?token_id={token_id}", timeout=aiohttp.ClientTimeout(total=5)) as r:
-                return await r.json()
-        except Exception:
-            return {"bids": [], "asks": []}
+    def _check_signal(self, symbol: str) -> str:
+        """Check if asset has clear direction with enough volatility."""
+        price = self.prices.get(symbol, 0)
+        start_price = self.prices_at_start.get(symbol, 0)
+        if not price or not start_price:
+            return "flat"
 
-    def _get_direction(self) -> str:
-        """Only trade when micro (5min) and macro (1h trend) AGREE."""
-        if self.btc_price <= 0 or self.btc_price_at_start <= 0:
-            return "unknown"
+        history = self.price_history.get(symbol, [])
 
-        # VOLATILITY GATE: if BTC moved less than 0.15% in last 5min of history, skip
-        if len(self._price_history) >= 60:
-            recent_prices = self._price_history[-60:]
-            high = max(recent_prices)
-            low = min(recent_prices)
-            volatility = (high - low) / low
-            if volatility < 0.0015:  # Less than 0.15% range = too flat
+        # Volatility gate
+        if len(history) >= 60:
+            recent = history[-60:]
+            vol = (max(recent) - min(recent)) / min(recent)
+            if vol < MIN_VOLATILITY:
                 return "flat"
 
-        # Micro: change in this 5min window
-        micro_change = (self.btc_price - self.btc_price_at_start) / self.btc_price_at_start
-        # Macro: trend over last ~5min
-        if len(self._price_history) >= 60:
-            macro_price = self._price_history[-60]
-            macro_change = (self.btc_price - macro_price) / macro_price
-        else:
-            macro_change = micro_change
+        # Direction
+        micro = (price - start_price) / start_price
+        macro = 0
+        if len(history) >= 60:
+            macro = (price - history[-60]) / history[-60]
 
-        # Need BOTH micro and macro to agree, and micro must be strong
-        if micro_change > 0.0004 and macro_change > 0.0001:
+        if micro > 0.0004 and macro > 0.0001:
             return "up"
-        elif micro_change < -0.0004 and macro_change < -0.0001:
+        elif micro < -0.0004 and macro < -0.0001:
             return "down"
         return "flat"
 
     async def run(self):
-        print(f"🎯 BTC Sniper started | Size: ${TRADE_SIZE} | Market: {MARKET_TYPE} | Entry: {ENTRY_SECONDS_BEFORE}s before close")
+        print(f"🎯 Multi-Crypto Sniper | Assets: {[a['name'] for a in ASSETS]} | Size: ${TRADE_SIZE}")
 
         async with aiohttp.ClientSession() as session:
-            # Get initial BTC price
-            self.btc_price = await self._get_btc_price(session)
-            print(f"   BTC: ${self.btc_price:,.2f}")
+            await self._get_prices(session)
+            print(f"   Prices: {', '.join(f'{a[\"name\"]}=${self.prices.get(a[\"symbol\"],0):,.2f}' for a in ASSETS)}")
 
             while True:
                 try:
                     await self._cycle(session)
                 except Exception as e:
-                    print(f"[ERROR] Cycle failed: {e}")
+                    print(f"[ERROR] {e}")
                 await asyncio.sleep(5)
 
     async def _cycle(self, session: aiohttp.ClientSession):
         now = int(time.time())
-
-        # Calculate current market window
         market_start = now - (now % INTERVAL)
         market_end = market_start + INTERVAL
         time_to_close = market_end - now
 
-        # Update BTC price
-        self.btc_price = await self._get_btc_price(session)
-        self._price_history.append(self.btc_price)
-        if len(self._price_history) > 720:  # Keep 1h of data (720 × 5s)
-            self._price_history = self._price_history[-720:]
+        await self._get_prices(session)
 
-        # Track price at market start
+        # New window
         if market_start != self.current_market_start:
             self.current_market_start = market_start
-            self.btc_price_at_start = self.btc_price
-            print(f"\n📊 New market window: {datetime.fromtimestamp(market_start, tz=timezone.utc).strftime('%H:%M')} - {datetime.fromtimestamp(market_end, tz=timezone.utc).strftime('%H:%M')} UTC")
-            print(f"   BTC start price: ${self.btc_price:,.2f}")
+            self.traded_this_window = set()
+            self.prices_at_start = dict(self.prices)
+            t = datetime.fromtimestamp(market_start, tz=timezone.utc).strftime('%H:%M')
+            print(f"\n📊 [{t}] New window | " + " ".join(f"{a['name']}=${self.prices.get(a['symbol'],0):,.1f}" for a in ASSETS))
 
         # Entry window: 60-120s before close
-        if 60 <= time_to_close <= 120 and not hasattr(self, f'_traded_{market_start}'):
-            direction = self._get_direction()
-            change_pct = (self.btc_price - self.btc_price_at_start) / self.btc_price_at_start * 100
+        if not (60 <= time_to_close <= 120):
+            return
 
-            print(f"   ⏰ Entry window! BTC: ${self.btc_price:,.2f} ({change_pct:+.3f}%) → {direction}")
+        for asset in ASSETS:
+            if asset["name"] in self.traded_this_window:
+                continue
 
+            direction = self._check_signal(asset["symbol"])
             if direction == "flat":
-                print(f"   ⏭ Skipping: no clear direction")
-                return
+                continue
 
-            # Get market tokens
-            up_token, down_token, condition = await self._get_market_tokens(session, market_start)
+            # Get tokens
+            up_token, down_token = await self._get_market_tokens(session, asset["slug"], market_start)
             if not up_token:
-                print(f"   ❌ Market not found for ts={market_start}")
-                return
+                continue
 
-            # Choose token based on direction
             token = up_token if direction == "up" else down_token
-            side_label = "UP" if direction == "up" else "DOWN"
+            side = "UP" if direction == "up" else "DOWN"
 
-            # Check orderbook for best price
-            ob = await self._check_orderbook(session, token)
-            asks = ob.get("asks", [])
-
-            # Determine entry price — use best ask if available and reasonable
-            if asks:
-                best_ask = float(asks[0]["price"])
-                if best_ask <= MAX_MAKER_PRICE:
-                    entry_price = best_ask  # Take the ask
+            # Check orderbook
+            try:
+                async with session.get(f"{CLOB_HOST}/book?token_id={token}", timeout=aiohttp.ClientTimeout(total=3)) as r:
+                    ob = await r.json()
+                asks = ob.get("asks", [])
+                if asks and float(asks[0]["price"]) <= MAX_MAKER_PRICE:
+                    entry_price = float(asks[0]["price"])
                 else:
-                    # Ask too expensive — place our own limit order as maker
                     entry_price = MAKER_PRICE
-                    print(f"   📝 Ask={best_ask:.3f} too high, placing maker @ {entry_price:.3f}")
-            else:
-                # No liquidity — place limit order at our price
+            except Exception:
                 entry_price = MAKER_PRICE
 
-            # Place order
-            print(f"   🎯 Placing {side_label} order: ${TRADE_SIZE} @ {entry_price:.3f}")
-            result = await self._place_maker_order(token, TRADE_SIZE, entry_price)
+            change = (self.prices[asset["symbol"]] - self.prices_at_start[asset["symbol"]]) / self.prices_at_start[asset["symbol"]] * 100
+            print(f"   🎯 {asset['name']} {side} ({change:+.3f}%) @ ${entry_price:.3f}")
 
+            result = await self._place_order(token, TRADE_SIZE, entry_price)
             if result.get("success"):
-                resp = result.get("response", {})
-                status = resp.get("status", "unknown") if isinstance(resp, dict) else str(resp)
-                print(f"   ✅ Order placed! Status: {status}")
-                self.trades_today += 1
-                setattr(self, f'_traded_{market_start}', True)
-
-                # Track position for TP monitoring
-                if status == "matched" or status == "live":
-                    self._active_position = {
-                        "token_id": token, "entry_price": entry_price,
-                        "shares": TRADE_SIZE / entry_price, "side": side_label,
-                    }
-
-                # Expected profit if wins
-                shares = TRADE_SIZE / entry_price
-                profit = shares * (1.0 - entry_price)
-                print(f"   📈 If wins: +${profit:.3f} ({(1/entry_price - 1)*100:.0f}% return)")
+                self.traded_this_window.add(asset["name"])
+                profit = (TRADE_SIZE / entry_price) * (1 - entry_price)
+                print(f"   ✅ {result['status']} | If wins: +${profit:.2f} ({(1/entry_price-1)*100:.0f}%)")
             else:
-                print(f"   ❌ Order failed: {result.get('error', 'unknown')}")
+                print(f"   ❌ {result.get('error','')[:40]}")
 
             self._save_state()
 
-        # TP Monitor: check if active position hit take-profit
-        if hasattr(self, '_active_position') and self._active_position:
-            pos = self._active_position
-            try:
-                ob = await self._check_orderbook(session, pos["token_id"])
-                bids = ob.get("bids", [])
-                if bids:
-                    best_bid = float(bids[0]["price"])
-                    tp_price = pos["entry_price"] * TP_MULTIPLIER
-                    if best_bid >= tp_price:
-                        # SELL! Take profit
-                        print(f"   💰 TP HIT! {pos['side']} bid={best_bid:.3f} >= tp={tp_price:.3f}")
-                        from bot.clients.polymarket import get_poly
-                        poly = get_poly()
-                        result = poly.sell_position(token_id=pos["token_id"], shares=pos["shares"])
-                        if result.get("success"):
-                            profit = pos["shares"] * (best_bid - pos["entry_price"])
-                            print(f"   🎉 SOLD! Profit: +${profit:.2f}")
-                            self.wins += 1
-                            self.total_pnl += profit
-                        else:
-                            print(f"   ⚠️ Sell failed: {result.get('error','')[:50]}")
-                        self._active_position = None
-                        self._save_state()
-            except Exception:
-                pass
-
-
-async def main():
-    sniper = BTCSniper()
-    await sniper.run()
-
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(MultiSniper().run())
