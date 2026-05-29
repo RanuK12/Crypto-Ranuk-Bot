@@ -13,7 +13,7 @@ from pathlib import Path
 import aiohttp
 
 # Config — EXACTLY what worked on May 27 night
-TRADE_SIZE = 1.00
+TRADE_SIZE = 2.50
 MAKER_PRICE = 0.18
 MAX_MAKER_PRICE = 0.22
 INTERVAL = 300
