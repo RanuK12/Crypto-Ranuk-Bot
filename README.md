@@ -23,3 +23,8 @@ python main.py         # paper mode by default
 - Daily loss cap: 3% ($0.60 on $20)
 - Max per trade: 5% ($1)
 - Kill switch auto-activates on cap breach
+
+
+## Licencia
+
+MIT — © 2026 Ranuk IT Solutions | [ranuk.dev](https://ranuk.dev)
