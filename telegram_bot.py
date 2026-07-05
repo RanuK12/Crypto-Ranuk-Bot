@@ -8,7 +8,7 @@ from pathlib import Path
 
 import aiohttp
 
-TOKEN = os.getenv("TELEGRAM_TOKEN", "8895254248:AAGTy6NYZSphH1q6pa4SwHp2glTaraesgPI")
+TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "8107555656")
 CRYPTO_STATE = Path("/app/shared/state.json")
 COMMANDS_FILE = Path("/app/shared/commands.json")

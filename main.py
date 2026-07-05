@@ -18,7 +18,7 @@ STATE_FILE = Path(__file__).parent / "state.json"
 SHARED_STATE = Path("/app/shared/state.json")
 COMMANDS_FILE = Path("/app/shared/commands.json")
 
-TG_TOKEN = os.getenv("TELEGRAM_TOKEN", "8895254248:AAGTy6NYZSphH1q6pa4SwHp2glTaraesgPI")
+TG_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 telegram.configure(TG_TOKEN, TG_CHAT_ID)
 
